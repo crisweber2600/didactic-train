@@ -1,5 +1,6 @@
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
+using Microsoft.Kiota.Abstractions;
 using SharePointDeduplicator.API.Models;
 using System.Security.Cryptography;
 using System.Collections.Concurrent;
@@ -198,10 +199,10 @@ public class SharePointScannerService : ISharePointScannerService
                 if (!string.IsNullOrEmpty(childrenResponse.OdataNextLink))
                 {
                     // Create a new request with the next page URL
-                    var nextPageRequestInfo = new Microsoft.Kiota.Abstractions.RequestInformation
+                    var nextPageRequestInfo = new RequestInformation
                     {
-                        HttpMethod = Microsoft.Kiota.Abstractions.Method.GET,
-                        UrlTemplate = childrenResponse.OdataNextLink
+                        HttpMethod = Method.GET,
+                        URI = new Uri(childrenResponse.OdataNextLink)
                     };
                     
                     childrenResponse = await _graphClient.RequestAdapter.SendAsync(
