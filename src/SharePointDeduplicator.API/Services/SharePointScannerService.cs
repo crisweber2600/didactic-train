@@ -160,9 +160,14 @@ public class SharePointScannerService : ISharePointScannerService
             var requestBuilder = _graphClient.Drives[driveId].Items[itemId].Children;
             var childrenResponse = await requestBuilder.GetAsync(cancellationToken: cancellationToken);
             
-            // Process all pages of results
-            while (childrenResponse != null)
+            // Process all pages of results (with safety limit to prevent infinite loops)
+            const int maxPages = 10000; // Safety limit: 10000 pages * 200 items = 2M items max
+            int pageCount = 0;
+            
+            while (childrenResponse != null && pageCount < maxPages)
             {
+                pageCount++;
+                
                 if (childrenResponse.Value == null) break;
 
                 foreach (var item in childrenResponse.Value)
@@ -215,6 +220,11 @@ public class SharePointScannerService : ISharePointScannerService
                     // No more pages, exit the loop
                     break;
                 }
+            }
+            
+            if (pageCount >= maxPages)
+            {
+                _logger.LogWarning("Reached maximum page limit ({MaxPages}) scanning drive {DriveId}, item {ItemId}", maxPages, driveId, itemId);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
