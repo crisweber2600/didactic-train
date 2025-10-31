@@ -4,6 +4,7 @@ using Microsoft.Kiota.Abstractions;
 using SharePointDeduplicator.API.Models;
 using System.Security.Cryptography;
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Options;
 
 namespace SharePointDeduplicator.API.Services;
 
@@ -19,13 +20,18 @@ public class SharePointScannerService : ISharePointScannerService
 {
     private readonly GraphServiceClient _graphClient;
     private readonly ILogger<SharePointScannerService> _logger;
+    private readonly ScannerOptions _options;
     private readonly ConcurrentDictionary<string, ScanReport> _scanReports = new();
     private readonly ConcurrentDictionary<string, List<string>> _shortcutMappings = new();
 
-    public SharePointScannerService(GraphServiceClient graphClient, ILogger<SharePointScannerService> logger)
+    public SharePointScannerService(
+        GraphServiceClient graphClient, 
+        ILogger<SharePointScannerService> logger,
+        IOptions<ScannerOptions> options)
     {
         _graphClient = graphClient;
         _logger = logger;
+        _options = options.Value;
     }
 
     public ScanReport? GetScanReport(string scanId)
@@ -160,15 +166,17 @@ public class SharePointScannerService : ISharePointScannerService
             var requestBuilder = _graphClient.Drives[driveId].Items[itemId].Children;
             var childrenResponse = await requestBuilder.GetAsync(cancellationToken: cancellationToken);
             
-            // Process all pages of results (with safety limit to prevent infinite loops)
-            const int maxPages = 10000; // Safety limit: 10000 pages * 200 items = 2M items max
+            // Track page count for safety limit (from configuration)
             int pageCount = 0;
+            int maxPages = _options.MaxPagesPerDirectory;
             
+            // Process all pages of results
             while (childrenResponse != null && pageCount < maxPages)
             {
-                pageCount++;
-                
                 if (childrenResponse.Value == null) break;
+
+                // Only increment page count for valid pages with data
+                pageCount++;
 
                 foreach (var item in childrenResponse.Value)
                 {
@@ -217,7 +225,7 @@ public class SharePointScannerService : ISharePointScannerService
                 }
                 else
                 {
-                    // No more pages, exit the loop
+                    // No more pages
                     break;
                 }
             }

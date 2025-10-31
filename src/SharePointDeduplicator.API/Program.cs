@@ -1,5 +1,6 @@
 using Azure.Identity;
 using Microsoft.Graph;
+using SharePointDeduplicator.API.Models;
 using SharePointDeduplicator.API.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -8,6 +9,10 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();
+
+// Configure scanner options
+builder.Services.Configure<ScannerOptions>(
+    builder.Configuration.GetSection(ScannerOptions.SectionName));
 
 // Add CORS for Blazor frontend
 builder.Services.AddCors(options =>
