@@ -233,7 +233,7 @@ else
     public string ScanId { get; set; } = string.Empty;
 
     private ScanReport? scanReport;
-    private Dictionary<string, string> selectedTrueCopies = new();
+    private readonly Dictionary<string, string> selectedTrueCopies = new();
     private string? errorMessage;
     private bool isReplacing = false;
     private bool isVerifying = false;
@@ -251,9 +251,19 @@ else
         {
             scanReport = await Http.GetFromJsonAsync<ScanReport>($"api/sharepoint/scan/{ScanId}");
         }
+        catch (HttpRequestException ex)
+        {
+            Logger.LogError(ex, "HTTP error loading report");
+            errorMessage = $"HTTP error loading report: {ex.Message}";
+        }
+        catch (TaskCanceledException ex)
+        {
+            Logger.LogError(ex, "Request timed out while loading report");
+            errorMessage = "Request timed out while loading report.";
+        }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Error loading report");
+            Logger.LogError(ex, "Unexpected error loading report");
             errorMessage = $"Error loading report: {ex.Message}";
         }
     }
@@ -299,10 +309,20 @@ else
                 errorMessage = $"Error replacing files: {response.StatusCode}";
             }
         }
+        catch (HttpRequestException ex)
+        {
+            errorMessage = $"Network error replacing files: {ex.Message}";
+            Logger.LogError(ex, "HTTP error during replacement");
+        }
+        catch (TaskCanceledException ex)
+        {
+            errorMessage = "Request timed out while replacing files.";
+            Logger.LogError(ex, "Timeout during replacement");
+        }
         catch (Exception ex)
         {
             errorMessage = $"Error replacing files: {ex.Message}";
-            Logger.LogError(ex, "Error during replacement");
+            Logger.LogError(ex, "Unexpected error during replacement");
         }
         finally
         {
@@ -330,10 +350,20 @@ else
                 errorMessage = $"Error verifying shortcuts: {response.StatusCode}";
             }
         }
+        catch (HttpRequestException ex)
+        {
+            errorMessage = $"Network error verifying shortcuts: {ex.Message}";
+            Logger.LogError(ex, "HTTP error during verification");
+        }
+        catch (TaskCanceledException ex)
+        {
+            errorMessage = "Request timed out while verifying shortcuts.";
+            Logger.LogError(ex, "Timeout during verification");
+        }
         catch (Exception ex)
         {
             errorMessage = $"Error verifying shortcuts: {ex.Message}";
-            Logger.LogError(ex, "Error during verification");
+            Logger.LogError(ex, "Unexpected error during verification");
         }
         finally
         {

@@ -117,10 +117,20 @@
                 Logger.LogError("Scan failed with status code: {StatusCode}", response.StatusCode);
             }
         }
+        catch (HttpRequestException ex)
+        {
+            errorMessage = $"Network error scanning site: {ex.Message}";
+            Logger.LogError(ex, "HTTP error during scan");
+        }
+        catch (TaskCanceledException ex)
+        {
+            errorMessage = "Request timed out while scanning site.";
+            Logger.LogError(ex, "Timeout during scan");
+        }
         catch (Exception ex)
         {
             errorMessage = $"Error scanning site: {ex.Message}";
-            Logger.LogError(ex, "Error during scan");
+            Logger.LogError(ex, "Unexpected error during scan");
         }
         finally
         {

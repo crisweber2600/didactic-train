@@ -59,12 +59,10 @@ public class SharePointScannerService : ISharePointScannerService
             var allFiles = new List<Models.FileInfo>();
 
             // Scan each drive
-            foreach (var drive in drives.Value)
+            foreach (var drive in drives.Value.Where(d => d.Id != null))
             {
-                if (drive.Id == null) continue;
-                
                 _logger.LogInformation("Scanning drive: {DriveName}", drive.Name);
-                var files = await ScanDriveAsync(site.Id, drive.Id, cancellationToken);
+                var files = await ScanDriveAsync(site.Id, drive.Id!, cancellationToken);
                 allFiles.AddRange(files);
             }
 
@@ -90,9 +88,21 @@ public class SharePointScannerService : ISharePointScannerService
 
             _logger.LogInformation("Scan completed. Found {Count} duplicate groups", duplicateGroups.Count);
         }
+        catch (OperationCanceledException ex)
+        {
+            _logger.LogWarning(ex, "Scan was cancelled for site {SiteUrl}", siteUrl);
+            report.Status = ScanStatus.Failed;
+            report.ErrorMessage = "Scan was cancelled.";
+        }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+        {
+            _logger.LogError(ex, "Graph API error scanning SharePoint site");
+            report.Status = ScanStatus.Failed;
+            report.ErrorMessage = ex.Message;
+        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error scanning SharePoint site");
+            _logger.LogError(ex, "Unexpected error scanning SharePoint site");
             report.Status = ScanStatus.Failed;
             report.ErrorMessage = ex.Message;
         }
@@ -128,9 +138,13 @@ public class SharePointScannerService : ISharePointScannerService
         {
             await ScanDriveItemsAsync(siteId, driveId, "root", files, cancellationToken);
         }
+        catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+        {
+            _logger.LogError(ex, "Graph API error scanning drive {DriveId}", driveId);
+        }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error scanning drive {DriveId}", driveId);
+            _logger.LogError(ex, "Unexpected error scanning drive {DriveId}", driveId);
         }
 
         return files;
@@ -157,26 +171,23 @@ public class SharePointScannerService : ISharePointScannerService
                         await ScanDriveItemsAsync(siteId, driveId, item.Id, files, cancellationToken);
                     }
                 }
-                else if (item.File != null)
+                else if (item.File != null && item.Id != null && item.Size.HasValue)
                 {
                     // Process file
-                    if (item.Id != null && item.Size.HasValue)
+                    var fileInfo = new Models.FileInfo
                     {
-                        var fileInfo = new Models.FileInfo
-                        {
-                            Id = item.Id,
-                            Name = item.Name ?? "Unknown",
-                            Path = GetItemPath(item),
-                            Size = item.Size.Value,
-                            Hash = item.File.Hashes?.QuickXorHash ?? item.File.Hashes?.Sha1Hash ?? string.Empty,
-                            LastModified = item.LastModifiedDateTime?.DateTime ?? DateTime.MinValue,
-                            WebUrl = item.WebUrl ?? string.Empty,
-                            SiteId = siteId,
-                            DriveId = driveId
-                        };
+                        Id = item.Id,
+                        Name = item.Name ?? "Unknown",
+                        Path = GetItemPath(item),
+                        Size = item.Size.Value,
+                        Hash = item.File.Hashes?.QuickXorHash ?? item.File.Hashes?.Sha1Hash ?? string.Empty,
+                        LastModified = item.LastModifiedDateTime?.DateTime ?? DateTime.MinValue,
+                        WebUrl = item.WebUrl ?? string.Empty,
+                        SiteId = siteId,
+                        DriveId = driveId
+                    };
 
-                        files.Add(fileInfo);
-                    }
+                    files.Add(fileInfo);
                 }
             }
         }
@@ -254,9 +265,30 @@ public class SharePointScannerService : ISharePointScannerService
 
                         _logger.LogInformation("Replaced file {Path} with shortcut", duplicate.Path);
                     }
+                    catch (UnauthorizedAccessException ex)
+                    {
+                        _logger.LogError(ex, "Unauthorized access replacing file {Path}", duplicate.Path);
+                        detail.Success = false;
+                        detail.ErrorMessage = ex.Message;
+                        result.FailedReplacements++;
+                    }
+                    catch (System.IO.IOException ex)
+                    {
+                        _logger.LogError(ex, "IO error replacing file {Path}", duplicate.Path);
+                        detail.Success = false;
+                        detail.ErrorMessage = ex.Message;
+                        result.FailedReplacements++;
+                    }
+                    catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+                    {
+                        _logger.LogError(ex, "Graph API error replacing file {Path}", duplicate.Path);
+                        detail.Success = false;
+                        detail.ErrorMessage = ex.Message;
+                        result.FailedReplacements++;
+                    }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Error replacing file {Path}", duplicate.Path);
+                        _logger.LogError(ex, "Unexpected error replacing file {Path}", duplicate.Path);
                         detail.Success = false;
                         detail.ErrorMessage = ex.Message;
                         result.FailedReplacements++;
@@ -337,7 +369,6 @@ public class SharePointScannerService : ISharePointScannerService
                 var firstGroup = scanReport.DuplicateGroups.FirstOrDefault(g => g.SelectedTrueCopy != null);
                 if (firstGroup?.SelectedTrueCopy == null) continue;
 
-                var siteId = firstGroup.SelectedTrueCopy.SiteId;
                 var driveId = firstGroup.SelectedTrueCopy.DriveId;
 
                 // Try to retrieve the shortcut file
@@ -370,9 +401,42 @@ public class SharePointScannerService : ISharePointScannerService
                     });
                 }
             }
+            catch (Microsoft.Graph.Models.ODataErrors.ODataError ex)
+            {
+                _logger.LogError(ex, "Graph API error verifying shortcut {Path}", shortcutPath);
+                result.BrokenShortcuts++;
+                result.BrokenDetails.Add(new BrokenShortcutDetail
+                {
+                    ShortcutPath = shortcutPath,
+                    TargetPath = string.Empty,
+                    Issue = $"Graph API error: {ex.Message}"
+                });
+            }
+            catch (System.IO.IOException ex)
+            {
+                _logger.LogError(ex, "IO error verifying shortcut {Path}", shortcutPath);
+                result.BrokenShortcuts++;
+                result.BrokenDetails.Add(new BrokenShortcutDetail
+                {
+                    ShortcutPath = shortcutPath,
+                    TargetPath = string.Empty,
+                    Issue = $"IO error: {ex.Message}"
+                });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, "Unauthorized access verifying shortcut {Path}", shortcutPath);
+                result.BrokenShortcuts++;
+                result.BrokenDetails.Add(new BrokenShortcutDetail
+                {
+                    ShortcutPath = shortcutPath,
+                    TargetPath = string.Empty,
+                    Issue = $"Unauthorized access: {ex.Message}"
+                });
+            }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error verifying shortcut {Path}", shortcutPath);
+                _logger.LogError(ex, "Unexpected error verifying shortcut {Path}", shortcutPath);
                 result.BrokenShortcuts++;
                 result.BrokenDetails.Add(new BrokenShortcutDetail
                 {
