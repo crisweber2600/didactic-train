@@ -100,7 +100,7 @@ public class SharePointScannerService : ISharePointScannerService
             report.Status = ScanStatus.Failed;
             report.ErrorMessage = ex.Message;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             _logger.LogError(ex, "Unexpected error scanning SharePoint site");
             report.Status = ScanStatus.Failed;
@@ -142,7 +142,7 @@ public class SharePointScannerService : ISharePointScannerService
         {
             _logger.LogError(ex, "Graph API error scanning drive {DriveId}", driveId);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             _logger.LogError(ex, "Unexpected error scanning drive {DriveId}", driveId);
         }
@@ -191,7 +191,7 @@ public class SharePointScannerService : ISharePointScannerService
                 }
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             _logger.LogError(ex, "Error scanning items in drive {DriveId}, item {ItemId}", driveId, itemId);
         }
@@ -286,7 +286,7 @@ public class SharePointScannerService : ISharePointScannerService
                         detail.ErrorMessage = ex.Message;
                         result.FailedReplacements++;
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
                     {
                         _logger.LogError(ex, "Unexpected error replacing file {Path}", duplicate.Path);
                         detail.Success = false;
@@ -434,7 +434,7 @@ public class SharePointScannerService : ISharePointScannerService
                     Issue = $"Unauthorized access: {ex.Message}"
                 });
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
             {
                 _logger.LogError(ex, "Unexpected error verifying shortcut {Path}", shortcutPath);
                 result.BrokenShortcuts++;

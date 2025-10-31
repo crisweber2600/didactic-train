@@ -127,7 +127,7 @@
             errorMessage = "Request timed out while scanning site.";
             Logger.LogError(ex, "Timeout during scan");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             errorMessage = $"Error scanning site: {ex.Message}";
             Logger.LogError(ex, "Unexpected error during scan");

@@ -261,7 +261,7 @@ else
             Logger.LogError(ex, "Request timed out while loading report");
             errorMessage = "Request timed out while loading report.";
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             Logger.LogError(ex, "Unexpected error loading report");
             errorMessage = $"Error loading report: {ex.Message}";
@@ -319,7 +319,7 @@ else
             errorMessage = "Request timed out while replacing files.";
             Logger.LogError(ex, "Timeout during replacement");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             errorMessage = $"Error replacing files: {ex.Message}";
             Logger.LogError(ex, "Unexpected error during replacement");
@@ -360,7 +360,7 @@ else
             errorMessage = "Request timed out while verifying shortcuts.";
             Logger.LogError(ex, "Timeout during verification");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
         {
             errorMessage = $"Error verifying shortcuts: {ex.Message}";
             Logger.LogError(ex, "Unexpected error during verification");
