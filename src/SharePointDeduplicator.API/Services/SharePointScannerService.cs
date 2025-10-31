@@ -154,40 +154,65 @@ public class SharePointScannerService : ISharePointScannerService
     {
         try
         {
-            // In MS Graph SDK v5+, we need to construct paths correctly
-            // Sites/{siteId}/drives/{driveId}/items/{itemId}/children
-            var childrenResponse = await _graphClient.Drives[driveId].Items[itemId].Children
-                .GetAsync(cancellationToken: cancellationToken);
+            // In MS Graph SDK v5+, we need to handle pagination to get all items
+            // Microsoft Graph paginates children collections (typically 200 items per page)
+            var requestBuilder = _graphClient.Drives[driveId].Items[itemId].Children;
+            var childrenResponse = await requestBuilder.GetAsync(cancellationToken: cancellationToken);
             
-            if (childrenResponse?.Value == null) return;
-
-            foreach (var item in childrenResponse.Value)
+            // Process all pages of results
+            while (childrenResponse != null)
             {
-                if (item.Folder != null)
+                if (childrenResponse.Value == null) break;
+
+                foreach (var item in childrenResponse.Value)
                 {
-                    // Recursively scan folders
-                    if (item.Id != null)
+                    if (item.Folder != null)
                     {
-                        await ScanDriveItemsAsync(siteId, driveId, item.Id, files, cancellationToken);
+                        // Recursively scan folders
+                        if (item.Id != null)
+                        {
+                            await ScanDriveItemsAsync(siteId, driveId, item.Id, files, cancellationToken);
+                        }
+                    }
+                    else if (item.File != null && item.Id != null && item.Size.HasValue)
+                    {
+                        // Process file
+                        var fileInfo = new Models.FileInfo
+                        {
+                            Id = item.Id,
+                            Name = item.Name ?? "Unknown",
+                            Path = GetItemPath(item),
+                            Size = item.Size.Value,
+                            Hash = item.File.Hashes?.QuickXorHash ?? item.File.Hashes?.Sha1Hash ?? string.Empty,
+                            LastModified = item.LastModifiedDateTime?.DateTime ?? DateTime.MinValue,
+                            WebUrl = item.WebUrl ?? string.Empty,
+                            SiteId = siteId,
+                            DriveId = driveId
+                        };
+
+                        files.Add(fileInfo);
                     }
                 }
-                else if (item.File != null && item.Id != null && item.Size.HasValue)
-                {
-                    // Process file
-                    var fileInfo = new Models.FileInfo
-                    {
-                        Id = item.Id,
-                        Name = item.Name ?? "Unknown",
-                        Path = GetItemPath(item),
-                        Size = item.Size.Value,
-                        Hash = item.File.Hashes?.QuickXorHash ?? item.File.Hashes?.Sha1Hash ?? string.Empty,
-                        LastModified = item.LastModifiedDateTime?.DateTime ?? DateTime.MinValue,
-                        WebUrl = item.WebUrl ?? string.Empty,
-                        SiteId = siteId,
-                        DriveId = driveId
-                    };
 
-                    files.Add(fileInfo);
+                // Check if there's a next page and fetch it using the @odata.nextLink
+                if (!string.IsNullOrEmpty(childrenResponse.OdataNextLink))
+                {
+                    // Create a new request with the next page URL
+                    var nextPageRequestInfo = new Microsoft.Kiota.Abstractions.RequestInformation
+                    {
+                        HttpMethod = Microsoft.Kiota.Abstractions.Method.GET,
+                        UrlTemplate = childrenResponse.OdataNextLink
+                    };
+                    
+                    childrenResponse = await _graphClient.RequestAdapter.SendAsync(
+                        nextPageRequestInfo,
+                        DriveItemCollectionResponse.CreateFromDiscriminatorValue,
+                        cancellationToken: cancellationToken);
+                }
+                else
+                {
+                    // No more pages, exit the loop
+                    break;
                 }
             }
         }
