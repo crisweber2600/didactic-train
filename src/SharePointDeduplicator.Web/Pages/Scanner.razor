@@ -1,0 +1,190 @@
+@page "/scanner"
+@inject HttpClient Http
+@inject ILogger<Scanner> Logger
+
+<PageTitle>SharePoint Scanner</PageTitle>
+
+<h1>SharePoint File Deduplication Scanner</h1>
+
+<div class="card mt-4">
+    <div class="card-body">
+        <h5 class="card-title">Scan SharePoint Site</h5>
+        
+        <div class="mb-3">
+            <label for="siteUrl" class="form-label">SharePoint Site URL</label>
+            <input type="text" class="form-control" id="siteUrl" @bind="siteUrl" placeholder="https://yourtenant.sharepoint.com/sites/yoursite" />
+        </div>
+
+        <button class="btn btn-primary" @onclick="StartScan" disabled="@isScanning">
+            @if (isScanning)
+            {
+                <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                <span>Scanning...</span>
+            }
+            else
+            {
+                <span>Start Scan</span>
+            }
+        </button>
+
+        @if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <div class="alert alert-danger mt-3" role="alert">
+                @errorMessage
+            </div>
+        }
+    </div>
+</div>
+
+@if (scanReport != null && scanReport.Status == ScanStatus.Completed)
+{
+    <div class="card mt-4">
+        <div class="card-body">
+            <h5 class="card-title">Scan Results</h5>
+            
+            <div class="row">
+                <div class="col-md-3">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <h6 class="card-subtitle mb-2 text-muted">Files Scanned</h6>
+                            <h3 class="card-title">@scanReport.TotalFilesScanned</h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <h6 class="card-subtitle mb-2 text-muted">Duplicates Found</h6>
+                            <h3 class="card-title">@scanReport.DuplicateFilesFound</h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <h6 class="card-subtitle mb-2 text-muted">Duplicate Groups</h6>
+                            <h3 class="card-title">@scanReport.DuplicateGroups.Count</h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <h6 class="card-subtitle mb-2 text-muted">Space Wasted</h6>
+                            <h3 class="card-title">@FormatBytes(scanReport.TotalSpaceWasted)</h3>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-4">
+                <button class="btn btn-success" @onclick="() => NavigateToReport()">View Detailed Report</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private string siteUrl = string.Empty;
+    private bool isScanning = false;
+    private string? errorMessage;
+    private ScanReport? scanReport;
+
+    private async Task StartScan()
+    {
+        if (string.IsNullOrWhiteSpace(siteUrl))
+        {
+            errorMessage = "Please enter a SharePoint site URL";
+            return;
+        }
+
+        isScanning = true;
+        errorMessage = null;
+        scanReport = null;
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("api/sharepoint/scan", new { siteUrl });
+            
+            if (response.IsSuccessStatusCode)
+            {
+                scanReport = await response.Content.ReadFromJsonAsync<ScanReport>();
+                Logger.LogInformation("Scan completed successfully. Scan ID: {ScanId}", scanReport?.ScanId);
+            }
+            else
+            {
+                errorMessage = $"Error scanning site: {response.StatusCode}";
+                Logger.LogError("Scan failed with status code: {StatusCode}", response.StatusCode);
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error scanning site: {ex.Message}";
+            Logger.LogError(ex, "Error during scan");
+        }
+        finally
+        {
+            isScanning = false;
+        }
+    }
+
+    private void NavigateToReport()
+    {
+        if (scanReport != null)
+        {
+            Navigation.NavigateTo($"/report/{scanReport.ScanId}");
+        }
+    }
+
+    private string FormatBytes(long bytes)
+    {
+        string[] sizes = { "B", "KB", "MB", "GB", "TB" };
+        double len = bytes;
+        int order = 0;
+        while (len >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            len = len / 1024;
+        }
+        return $"{len:0.##} {sizes[order]}";
+    }
+
+    public class ScanReport
+    {
+        public string ScanId { get; set; } = string.Empty;
+        public DateTime ScanDate { get; set; }
+        public string SiteUrl { get; set; } = string.Empty;
+        public int TotalFilesScanned { get; set; }
+        public int DuplicateFilesFound { get; set; }
+        public long TotalSpaceWasted { get; set; }
+        public List<DuplicateGroup> DuplicateGroups { get; set; } = new();
+        public ScanStatus Status { get; set; }
+        public string? ErrorMessage { get; set; }
+    }
+
+    public class DuplicateGroup
+    {
+        public string Hash { get; set; } = string.Empty;
+        public long FileSize { get; set; }
+        public List<FileInfo> Files { get; set; } = new();
+        public long TotalWastedSpace { get; set; }
+    }
+
+    public class FileInfo
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Path { get; set; } = string.Empty;
+        public long Size { get; set; }
+        public string WebUrl { get; set; } = string.Empty;
+    }
+
+    public enum ScanStatus
+    {
+        InProgress,
+        Completed,
+        Failed
+    }
+}
+
+@inject NavigationManager Navigation

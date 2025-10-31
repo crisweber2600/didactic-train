@@ -1,0 +1,407 @@
+@page "/report/{ScanId}"
+@inject HttpClient Http
+@inject ILogger<Report> Logger
+@inject NavigationManager Navigation
+
+<PageTitle>Deduplication Report</PageTitle>
+
+<h1>Deduplication Report</h1>
+
+@if (scanReport == null)
+{
+    <div class="text-center mt-5">
+        <div class="spinner-border" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <p class="mt-2">Loading report...</p>
+    </div>
+}
+else
+{
+    <div class="card mt-4">
+        <div class="card-body">
+            <h5 class="card-title">Summary</h5>
+            <p><strong>Site:</strong> @scanReport.SiteUrl</p>
+            <p><strong>Scan Date:</strong> @scanReport.ScanDate.ToLocalTime().ToString("g")</p>
+            <p><strong>Total Files:</strong> @scanReport.TotalFilesScanned</p>
+            <p><strong>Duplicate Files:</strong> @scanReport.DuplicateFilesFound</p>
+            <p><strong>Space Wasted:</strong> @FormatBytes(scanReport.TotalSpaceWasted)</p>
+        </div>
+    </div>
+
+    @if (scanReport.DuplicateGroups.Any())
+    {
+        <div class="card mt-4">
+            <div class="card-body">
+                <h5 class="card-title">Duplicate Groups</h5>
+                
+                @foreach (var (group, index) in scanReport.DuplicateGroups.Select((g, i) => (g, i)))
+                {
+                    <div class="card mb-3">
+                        <div class="card-header">
+                            <h6>Group @(index + 1) - @group.Files.Count files (@FormatBytes(group.FileSize) each, @FormatBytes(group.TotalWastedSpace) wasted)</h6>
+                        </div>
+                        <div class="card-body">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Select</th>
+                                        <th>File Name</th>
+                                        <th>Path</th>
+                                        <th>Size</th>
+                                        <th>Link</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var file in group.Files)
+                                    {
+                                        <tr>
+                                            <td>
+                                                <input type="radio" 
+                                                       name="group_@group.Hash" 
+                                                       value="@file.Id"
+                                                       @onchange="() => SelectTrueCopy(group.Hash, file.Id)" />
+                                            </td>
+                                            <td>@file.Name</td>
+                                            <td><small>@file.Path</small></td>
+                                            <td>@FormatBytes(file.Size)</td>
+                                            <td>
+                                                <a href="@file.WebUrl" target="_blank" class="btn btn-sm btn-link">Open</a>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+
+                <div class="mt-4">
+                    <button class="btn btn-primary" @onclick="ReplaceWithShortcuts" disabled="@(!AllGroupsHaveSelection() || isReplacing)">
+                        @if (isReplacing)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                            <span>Replacing...</span>
+                        }
+                        else
+                        {
+                            <span>Replace Duplicates with Shortcuts</span>
+                        }
+                    </button>
+                </div>
+
+                @if (!string.IsNullOrEmpty(errorMessage))
+                {
+                    <div class="alert alert-danger mt-3" role="alert">
+                        @errorMessage
+                    </div>
+                }
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="alert alert-info mt-4">
+            No duplicate files found!
+        </div>
+    }
+}
+
+@if (replacementResult != null)
+{
+    <div class="card mt-4">
+        <div class="card-body">
+            <h5 class="card-title">Replacement Results</h5>
+            
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <h6 class="card-subtitle mb-2 text-muted">Total Replacements</h6>
+                            <h3 class="card-title">@replacementResult.TotalReplacements</h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card text-center bg-success text-white">
+                        <div class="card-body">
+                            <h6 class="card-subtitle mb-2">Successful</h6>
+                            <h3 class="card-title">@replacementResult.SuccessfulReplacements</h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card text-center @(replacementResult.FailedReplacements > 0 ? "bg-danger text-white" : "")">
+                        <div class="card-body">
+                            <h6 class="card-subtitle mb-2 @(replacementResult.FailedReplacements > 0 ? "" : "text-muted")">Failed</h6>
+                            <h3 class="card-title">@replacementResult.FailedReplacements</h3>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            @if (replacementResult.AllSuccessful)
+            {
+                <div class="mt-4">
+                    <button class="btn btn-primary" @onclick="VerifyShortcuts" disabled="@isVerifying">
+                        @if (isVerifying)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                            <span>Verifying...</span>
+                        }
+                        else
+                        {
+                            <span>Verify Shortcuts</span>
+                        }
+                    </button>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@if (verificationResult != null)
+{
+    <div class="card mt-4">
+        <div class="card-body">
+            <h5 class="card-title">Verification Results</h5>
+            
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <h6 class="card-subtitle mb-2 text-muted">Total Checked</h6>
+                            <h3 class="card-title">@verificationResult.TotalShortcutsChecked</h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card text-center bg-success text-white">
+                        <div class="card-body">
+                            <h6 class="card-subtitle mb-2">Valid</h6>
+                            <h3 class="card-title">@verificationResult.ValidShortcuts</h3>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card text-center @(verificationResult.BrokenShortcuts > 0 ? "bg-danger text-white" : "")">
+                        <div class="card-body">
+                            <h6 class="card-subtitle mb-2 @(verificationResult.BrokenShortcuts > 0 ? "" : "text-muted")">Broken</h6>
+                            <h3 class="card-title">@verificationResult.BrokenShortcuts</h3>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            @if (verificationResult.AllValid)
+            {
+                <div class="alert alert-success mt-3" role="alert">
+                    ✓ All shortcuts are valid! Folder navigation structure is intact.
+                </div>
+            }
+            else
+            {
+                <div class="alert alert-warning mt-3" role="alert">
+                    ⚠ Some shortcuts are broken. Please review the details below.
+                </div>
+
+                <h6 class="mt-3">Broken Shortcuts:</h6>
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Shortcut Path</th>
+                            <th>Issue</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var broken in verificationResult.BrokenDetails)
+                        {
+                            <tr>
+                                <td>@broken.ShortcutPath</td>
+                                <td>@broken.Issue</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string ScanId { get; set; } = string.Empty;
+
+    private ScanReport? scanReport;
+    private Dictionary<string, string> selectedTrueCopies = new();
+    private string? errorMessage;
+    private bool isReplacing = false;
+    private bool isVerifying = false;
+    private ReplacementResult? replacementResult;
+    private VerificationResult? verificationResult;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadReport();
+    }
+
+    private async Task LoadReport()
+    {
+        try
+        {
+            scanReport = await Http.GetFromJsonAsync<ScanReport>($"api/sharepoint/scan/{ScanId}");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error loading report");
+            errorMessage = $"Error loading report: {ex.Message}";
+        }
+    }
+
+    private void SelectTrueCopy(string hash, string fileId)
+    {
+        selectedTrueCopies[hash] = fileId;
+    }
+
+    private bool AllGroupsHaveSelection()
+    {
+        if (scanReport == null) return false;
+        return scanReport.DuplicateGroups.All(g => selectedTrueCopies.ContainsKey(g.Hash));
+    }
+
+    private async Task ReplaceWithShortcuts()
+    {
+        isReplacing = true;
+        errorMessage = null;
+
+        try
+        {
+            var request = new
+            {
+                scanId = ScanId,
+                selections = selectedTrueCopies.Select(kvp => new
+                {
+                    hash = kvp.Key,
+                    trueCopyFileId = kvp.Value
+                }).ToList()
+            };
+
+            var response = await Http.PostAsJsonAsync("api/sharepoint/replace", request);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                replacementResult = await response.Content.ReadFromJsonAsync<ReplacementResult>();
+                Logger.LogInformation("Replacement completed. Successful: {Success}, Failed: {Failed}", 
+                    replacementResult?.SuccessfulReplacements, replacementResult?.FailedReplacements);
+            }
+            else
+            {
+                errorMessage = $"Error replacing files: {response.StatusCode}";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error replacing files: {ex.Message}";
+            Logger.LogError(ex, "Error during replacement");
+        }
+        finally
+        {
+            isReplacing = false;
+        }
+    }
+
+    private async Task VerifyShortcuts()
+    {
+        isVerifying = true;
+        errorMessage = null;
+
+        try
+        {
+            var response = await Http.PostAsync($"api/sharepoint/verify/{ScanId}", null);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                verificationResult = await response.Content.ReadFromJsonAsync<VerificationResult>();
+                Logger.LogInformation("Verification completed. Valid: {Valid}, Broken: {Broken}", 
+                    verificationResult?.ValidShortcuts, verificationResult?.BrokenShortcuts);
+            }
+            else
+            {
+                errorMessage = $"Error verifying shortcuts: {response.StatusCode}";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error verifying shortcuts: {ex.Message}";
+            Logger.LogError(ex, "Error during verification");
+        }
+        finally
+        {
+            isVerifying = false;
+        }
+    }
+
+    private string FormatBytes(long bytes)
+    {
+        string[] sizes = { "B", "KB", "MB", "GB", "TB" };
+        double len = bytes;
+        int order = 0;
+        while (len >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            len = len / 1024;
+        }
+        return $"{len:0.##} {sizes[order]}";
+    }
+
+    public class ScanReport
+    {
+        public string ScanId { get; set; } = string.Empty;
+        public DateTime ScanDate { get; set; }
+        public string SiteUrl { get; set; } = string.Empty;
+        public int TotalFilesScanned { get; set; }
+        public int DuplicateFilesFound { get; set; }
+        public long TotalSpaceWasted { get; set; }
+        public List<DuplicateGroup> DuplicateGroups { get; set; } = new();
+    }
+
+    public class DuplicateGroup
+    {
+        public string Hash { get; set; } = string.Empty;
+        public long FileSize { get; set; }
+        public List<FileInfo> Files { get; set; } = new();
+        public long TotalWastedSpace { get; set; }
+    }
+
+    public class FileInfo
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Path { get; set; } = string.Empty;
+        public long Size { get; set; }
+        public string WebUrl { get; set; } = string.Empty;
+    }
+
+    public class ReplacementResult
+    {
+        public int TotalReplacements { get; set; }
+        public int SuccessfulReplacements { get; set; }
+        public int FailedReplacements { get; set; }
+        public bool AllSuccessful { get; set; }
+    }
+
+    public class VerificationResult
+    {
+        public int TotalShortcutsChecked { get; set; }
+        public int ValidShortcuts { get; set; }
+        public int BrokenShortcuts { get; set; }
+        public List<BrokenShortcutDetail> BrokenDetails { get; set; } = new();
+        public bool AllValid { get; set; }
+    }
+
+    public class BrokenShortcutDetail
+    {
+        public string ShortcutPath { get; set; } = string.Empty;
+        public string Issue { get; set; } = string.Empty;
+    }
+}
