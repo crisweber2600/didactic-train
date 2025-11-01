@@ -175,8 +175,11 @@ public class SharePointScannerService : ISharePointScannerService
             {
                 if (childrenResponse.Value == null) break;
 
-                // Only increment page count for valid pages with data
-                pageCount++;
+                // Only increment page count for pages that contain actual items
+                if (childrenResponse.Value.Count > 0)
+                {
+                    pageCount++;
+                }
 
                 foreach (var item in childrenResponse.Value)
                 {
