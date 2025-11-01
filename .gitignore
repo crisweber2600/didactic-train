@@ -416,3 +416,8 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Local configuration with secrets (use appsettings.template.json as reference)
+# appsettings.json with real secrets should not be committed
+# Uncomment the line below after replacing template values:
+# **/appsettings.json
