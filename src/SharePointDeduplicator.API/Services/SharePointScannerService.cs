@@ -1,8 +1,10 @@
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
+using Microsoft.Kiota.Abstractions;
 using SharePointDeduplicator.API.Models;
 using System.Security.Cryptography;
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Options;
 
 namespace SharePointDeduplicator.API.Services;
 
@@ -18,13 +20,18 @@ public class SharePointScannerService : ISharePointScannerService
 {
     private readonly GraphServiceClient _graphClient;
     private readonly ILogger<SharePointScannerService> _logger;
+    private readonly ScannerOptions _options;
     private readonly ConcurrentDictionary<string, ScanReport> _scanReports = new();
     private readonly ConcurrentDictionary<string, List<string>> _shortcutMappings = new();
 
-    public SharePointScannerService(GraphServiceClient graphClient, ILogger<SharePointScannerService> logger)
+    public SharePointScannerService(
+        GraphServiceClient graphClient, 
+        ILogger<SharePointScannerService> logger,
+        IOptions<ScannerOptions> options)
     {
         _graphClient = graphClient;
         _logger = logger;
+        _options = options.Value;
     }
 
     public ScanReport? GetScanReport(string scanId)
@@ -154,41 +161,81 @@ public class SharePointScannerService : ISharePointScannerService
     {
         try
         {
-            // In MS Graph SDK v5+, we need to construct paths correctly
-            // Sites/{siteId}/drives/{driveId}/items/{itemId}/children
-            var childrenResponse = await _graphClient.Drives[driveId].Items[itemId].Children
-                .GetAsync(cancellationToken: cancellationToken);
+            // In MS Graph SDK v5+, we need to handle pagination to get all items
+            // Microsoft Graph paginates children collections (typically 200 items per page)
+            var requestBuilder = _graphClient.Drives[driveId].Items[itemId].Children;
+            var childrenResponse = await requestBuilder.GetAsync(cancellationToken: cancellationToken);
             
-            if (childrenResponse?.Value == null) return;
-
-            foreach (var item in childrenResponse.Value)
+            // Track page count for safety limit (from configuration)
+            int pageCount = 0;
+            int maxPages = _options.MaxPagesPerDirectory;
+            
+            // Process all pages of results
+            while (childrenResponse != null && pageCount < maxPages)
             {
-                if (item.Folder != null)
+                if (childrenResponse.Value == null) break;
+
+                // Only increment page count for pages that contain actual items
+                if (childrenResponse.Value.Count > 0)
                 {
-                    // Recursively scan folders
-                    if (item.Id != null)
+                    pageCount++;
+                }
+
+                foreach (var item in childrenResponse.Value)
+                {
+                    if (item.Folder != null)
                     {
-                        await ScanDriveItemsAsync(siteId, driveId, item.Id, files, cancellationToken);
+                        // Recursively scan folders
+                        if (item.Id != null)
+                        {
+                            await ScanDriveItemsAsync(siteId, driveId, item.Id, files, cancellationToken);
+                        }
+                    }
+                    else if (item.File != null && item.Id != null && item.Size.HasValue)
+                    {
+                        // Process file
+                        var fileInfo = new Models.FileInfo
+                        {
+                            Id = item.Id,
+                            Name = item.Name ?? "Unknown",
+                            Path = GetItemPath(item),
+                            Size = item.Size.Value,
+                            Hash = item.File.Hashes?.QuickXorHash ?? item.File.Hashes?.Sha1Hash ?? string.Empty,
+                            LastModified = item.LastModifiedDateTime?.DateTime ?? DateTime.MinValue,
+                            WebUrl = item.WebUrl ?? string.Empty,
+                            SiteId = siteId,
+                            DriveId = driveId
+                        };
+
+                        files.Add(fileInfo);
                     }
                 }
-                else if (item.File != null && item.Id != null && item.Size.HasValue)
-                {
-                    // Process file
-                    var fileInfo = new Models.FileInfo
-                    {
-                        Id = item.Id,
-                        Name = item.Name ?? "Unknown",
-                        Path = GetItemPath(item),
-                        Size = item.Size.Value,
-                        Hash = item.File.Hashes?.QuickXorHash ?? item.File.Hashes?.Sha1Hash ?? string.Empty,
-                        LastModified = item.LastModifiedDateTime?.DateTime ?? DateTime.MinValue,
-                        WebUrl = item.WebUrl ?? string.Empty,
-                        SiteId = siteId,
-                        DriveId = driveId
-                    };
 
-                    files.Add(fileInfo);
+                // Check if there's a next page and fetch it using the @odata.nextLink
+                if (!string.IsNullOrEmpty(childrenResponse.OdataNextLink))
+                {
+                    // Create a new request with the next page URL
+                    var nextPageRequestInfo = new RequestInformation
+                    {
+                        HttpMethod = Method.GET,
+                        URI = new Uri(childrenResponse.OdataNextLink)
+                    };
+                    
+                    childrenResponse = await _graphClient.RequestAdapter.SendAsync(
+                        nextPageRequestInfo,
+                        DriveItemCollectionResponse.CreateFromDiscriminatorValue,
+                        cancellationToken: cancellationToken);
                 }
+                else
+                {
+                    // No more pages
+                    break;
+                }
+            }
+            
+            if (pageCount >= maxPages)
+            {
+                _logger.LogWarning("Reached maximum page limit ({MaxPages}) scanning drive {DriveId}, item {ItemId}", maxPages, driveId, itemId);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
